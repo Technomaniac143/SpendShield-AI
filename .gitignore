@@ -7,3 +7,5 @@ fabric/credentials/
 fabric/wallet/
 *.pem
 *.key
+.venv/
+.env.example    
