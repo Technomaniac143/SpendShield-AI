@@ -4,20 +4,16 @@ from pydantic import BaseModel, Field
 
 
 class RegisterEvidenceRequest(BaseModel):
-    tenant_id: str = Field(min_length=1)
     record_id: str = Field(min_length=1)
     event_type: str = Field(min_length=1)
-    document_hash: str = Field(min_length=64, max_length=64)
-    actor: str = Field(min_length=1)
     timestamp: str = Field(min_length=1)
-    metadata_hash: str = Field(min_length=64, max_length=64)
     source_type: str = "DOCUMENT"
     source_id: str | None = None
+    metadata_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class VerifyEvidenceRequest(BaseModel):
-    tenant_id: str = Field(min_length=1)
-    current_document_hash: str = Field(min_length=64, max_length=64)
+    pass
 
 
 class EvidenceResponse(BaseModel):

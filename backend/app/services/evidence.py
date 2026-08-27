@@ -1,13 +1,16 @@
-from datetime import datetime
+import json
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import Principal
 from app.core.config import get_settings
-from app.integrations.blockchain import FabricClient, FabricTransactionRejected, FabricUnavailable
-from app.models import Evidence
+from app.integrations.blockchain import FabricClient
+from app.integrations.storage import ObjectStorage, document_hash
+from app.models import Evidence, FabricOutbox, OutboxStatus
 from app.schemas import RegisterEvidenceRequest
 from app.utils import is_sha256
 
@@ -19,62 +22,66 @@ SUPPORTED_EVENT_TYPES = {
 
 
 class EvidenceService:
-    def __init__(self, db: Session, fabric: FabricClient):
+    def __init__(self, db: Session, fabric: FabricClient, storage: ObjectStorage):
         self.db = db
         self.fabric = fabric
+        self.storage = storage
         self.settings = get_settings()
 
-    def register(self, event_id: str, request: RegisterEvidenceRequest) -> dict[str, Any]:
-        if not is_sha256(request.document_hash) or not is_sha256(request.metadata_hash):
-            raise ValueError("document_hash and metadata_hash must be SHA-256 hexadecimal values")
+    def register(self, event_id: str, request: RegisterEvidenceRequest, principal: Principal, document: bytes) -> dict[str, Any]:
+        if not document:
+            raise ValueError("document is required")
         if request.event_type not in SUPPORTED_EVENT_TYPES:
             raise ValueError("unsupported event_type")
-        existing = self.db.scalar(select(Evidence).where(Evidence.tenant_id == request.tenant_id,
-                                                        Evidence.fabric_event_id == event_id))
-        if existing and existing.verification_status == "REGISTERED":
+        content_hash = document_hash(document)
+        metadata_hash = request.metadata_hash or document_hash(
+            json.dumps({"record_id": request.record_id, "event_type": request.event_type}, sort_keys=True).encode()
+        )
+        if not is_sha256(metadata_hash):
+            raise ValueError("metadata_hash must be a SHA-256 hexadecimal value")
+        existing = self.db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id))
+        if existing:
+            if existing.tenant_id != principal.tenant_id:
+                raise ValueError("event_id is already registered")
             return self.to_response(existing, "ALREADY_REGISTERED")
-        record = existing or Evidence(tenant_id=request.tenant_id, source_type=request.source_type, source_id=request.source_id,
-                                      record_id=request.record_id, event_type=request.event_type,
-                                      document_hash=request.document_hash.lower(), metadata_hash=request.metadata_hash.lower(),
-                                      created_by=request.actor, event_timestamp=request.timestamp,
-                                      fabric_event_id=event_id, fabric_channel=self.settings.fabric_channel,
-                                      fabric_chaincode=self.settings.fabric_chaincode)
+        storage_key = f"{principal.tenant_id}/{event_id}/{uuid4().hex}.pdf"
+        self.storage.put(storage_key, document)
+        payload = {
+            "eventId": event_id, "tenantId": principal.tenant_id, "recordId": request.record_id,
+            "eventType": request.event_type, "documentHash": content_hash, "actor": principal.actor,
+            "timestamp": request.timestamp, "metadataHash": metadata_hash.lower(),
+        }
+        record = Evidence(
+            tenant_id=principal.tenant_id, source_type=request.source_type, source_id=request.source_id,
+            storage_key=storage_key, record_id=request.record_id, event_type=request.event_type,
+            document_hash=content_hash, metadata_hash=metadata_hash.lower(), created_by=principal.actor,
+            event_timestamp=request.timestamp, fabric_event_id=event_id,
+            fabric_channel=self.settings.fabric_channel, fabric_chaincode=self.settings.fabric_chaincode,
+            verification_status="PENDING_BLOCKCHAIN_VERIFICATION",
+        )
+        outbox = FabricOutbox(tenant_id=principal.tenant_id, event_id=event_id, event_type=request.event_type,
+                              payload=json.dumps(payload, sort_keys=True), status=OutboxStatus.PENDING)
         try:
-            if existing is None:
-                self.db.add(record)
-                self.db.flush()
-            result = self.fabric.register_evidence(eventId=event_id, tenantId=request.tenant_id, recordId=request.record_id,
-                                                   eventType=request.event_type, documentHash=request.document_hash.lower(),
-                                                   actor=request.actor, timestamp=request.timestamp,
-                                                   metadataHash=request.metadata_hash.lower())
-            record.fabric_transaction_id = result.get("transactionId")
-            record.verification_status = "REGISTERED"
+            self.db.add_all([record, outbox])
             self.db.commit()
-            return {"status": "REGISTERED", "eventId": event_id, "fabricTransactionId": record.fabric_transaction_id,
-                    "channel": self.settings.fabric_channel, "chaincode": self.settings.fabric_chaincode}
-        except FabricTransactionRejected as exc:
+        except IntegrityError as exc:
             self.db.rollback()
-            raise ValueError("event_id is already registered on Fabric") from exc
-        except FabricUnavailable:
-            self.db.rollback()
-            record.verification_status = "PENDING_BLOCKCHAIN_VERIFICATION"
-            self.db.add(record)
-            self.db.commit()
-            return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}
-        except IntegrityError:
-            self.db.rollback()
-            raise ValueError("event_id is already registered for this tenant")
+            raise ValueError("event_id is already registered") from exc
+        return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}
 
-    def verify(self, event_id: str, tenant_id: str, current_document_hash: str) -> dict[str, str]:
-        if not is_sha256(current_document_hash):
-            raise ValueError("current_document_hash must be a SHA-256 hexadecimal value")
-        record = self.db.scalar(select(Evidence).where(Evidence.tenant_id == tenant_id,
-                                                        Evidence.fabric_event_id == event_id))
+    def verify(self, event_id: str, principal: Principal) -> dict[str, str]:
+        record = self.db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id, Evidence.tenant_id == principal.tenant_id))
         if record is None:
             return {"status": "NOT_REGISTERED", "eventId": event_id}
-        status = "VERIFIED" if record.document_hash == current_document_hash.lower() else "INTEGRITY_FAILURE"
-        return {"status": status, "eventId": event_id, "registeredHash": record.document_hash,
-                "currentHash": current_document_hash.lower()}
+        current_hash = document_hash(self.storage.get(record.storage_key))
+        registered = self.fabric.get_evidence(event_id)
+        if registered.get("status") != "FOUND":
+            return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}
+        registered_hash = registered["documentHash"]
+        status = "VERIFIED" if registered_hash == current_hash else "INTEGRITY_FAILURE"
+        record.verification_status = status
+        self.db.commit()
+        return {"status": status, "eventId": event_id, "registeredHash": registered_hash, "currentHash": current_hash}
 
     @staticmethod
     def to_response(record: Evidence, status: str) -> dict[str, Any]:

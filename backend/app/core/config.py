@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "SpendShield AI"
     database_url: str = "sqlite:///./spendshield.db"
+    auth_secret: str = ""
+    storage_endpoint_url: str = "http://localhost:9000"
+    storage_access_key: str = ""
+    storage_secret_key: str = ""
+    storage_bucket: str = "spendshield-evidence"
     fabric_gateway_url: str = "grpc://localhost:7051"
     fabric_channel: str = "spendchannel"
     fabric_chaincode: str = "spendshield"

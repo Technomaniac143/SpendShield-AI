@@ -9,12 +9,13 @@ from app.core.database import Base
 
 class Evidence(Base):
     __tablename__ = "evidence"
-    __table_args__ = (UniqueConstraint("tenant_id", "fabric_event_id", name="uq_evidence_tenant_event"),)
+    __table_args__ = (UniqueConstraint("fabric_event_id", name="uq_evidence_fabric_event"),)
 
     evidence_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     source_type: Mapped[str] = mapped_column(String(64), default="DOCUMENT")
     source_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    storage_key: Mapped[str] = mapped_column(String(512))
     record_id: Mapped[str] = mapped_column(String(128), index=True)
     event_type: Mapped[str] = mapped_column(String(64))
     document_hash: Mapped[str] = mapped_column(String(64))

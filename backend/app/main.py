@@ -1,11 +1,15 @@
 from fastapi import FastAPI
 
 from app.api import evidence
-from app.core.database import Base, engine
+from app.integrations.blockchain import get_fabric_client
 
-Base.metadata.create_all(bind=engine)
 app = FastAPI(title="SpendShield AI")
 app.include_router(evidence.router, prefix="/api/v1")
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    get_fabric_client().close()
 
 
 @app.get("/health")

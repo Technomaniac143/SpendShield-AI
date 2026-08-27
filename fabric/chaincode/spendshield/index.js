@@ -21,7 +21,7 @@ class SpendShieldContract extends Contract {
     }
     if (!SUPPORTED_EVENT_TYPES.has(eventType)) throw new Error(`unsupported eventType: ${eventType}`);
     if (!SHA256.test(documentHash) || !SHA256.test(metadataHash)) throw new Error("hashes must be SHA-256 hexadecimal values");
-    if (await this.EvidenceExists(ctx, eventId)) throw new Error(`evidence already exists: ${eventId}`);
+    if (await this.EvidenceExists(ctx, eventId)) throw new Error(`DUPLICATE_EVENT_ID: ${eventId}`);
 
     const evidence = {
       eventId, tenantId, recordId, eventType, documentHash: documentHash.toLowerCase(), actor,
