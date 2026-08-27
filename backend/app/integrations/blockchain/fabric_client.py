@@ -26,6 +26,7 @@ class FabricClient:
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._responses: queue.Queue[str | None] = queue.Queue()
+        self._stderr_output: list[str] = []
 
     def _helper_path(self) -> Path:
         helper = Path(self.settings.fabric_helper_path)
@@ -44,12 +45,14 @@ class FabricClient:
             "FABRIC_PEER_HOST_ALIAS": self.settings.fabric_peer_host_alias,
         }
         try:
+            self._stderr_output = []
             process = subprocess.Popen(
                 ["node", str(self._helper_path())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True, bufsize=1, env={**os.environ, **environment},
+                stderr=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, **environment},
             )
             self._responses = queue.Queue()
             threading.Thread(target=self._read_responses, args=(process,), daemon=True).start()
+            threading.Thread(target=self._read_stderr, args=(process,), daemon=True).start()
             return process
         except OSError as exc:
             raise FabricUnavailable("Node.js Fabric Gateway worker is unavailable") from exc
@@ -70,7 +73,10 @@ class FabricClient:
                 self._discard_process()
                 raise FabricUnavailable("Fabric Gateway request timed out") from exc
             if not line:
+                err_logs = "".join(self._stderr_output).strip()
                 self._discard_process()
+                if err_logs:
+                    raise FabricUnavailable(f"Fabric Gateway worker exited: {err_logs}")
                 raise FabricUnavailable("Fabric Gateway worker exited")
             try:
                 response = json.loads(line)
@@ -78,9 +84,11 @@ class FabricClient:
                 raise FabricUnavailable("Fabric Gateway returned invalid JSON") from exc
             error = response.get("error")
             if error:
-                if error.get("code") == "DUPLICATE_EVENT_ID":
-                    raise FabricTransactionRejected(error.get("message", "duplicate event"))
-                raise FabricUnavailable(error.get("message", "Fabric request failed"))
+                code = error.get("code")
+                message = error.get("message", "Fabric request failed")
+                if code in ("DUPLICATE_EVENT_ID", "UNAUTHORIZED", "INVALID_INPUT"):
+                    raise FabricTransactionRejected(message)
+                raise FabricUnavailable(message)
             return response
 
     def close(self) -> None:
@@ -104,6 +112,12 @@ class FabricClient:
             self._responses.put(line)
         self._responses.put(None)
 
+    def _read_stderr(self, process: subprocess.Popen[str]) -> None:
+        if process.stderr is None:
+            return
+        for line in process.stderr:
+            self._stderr_output.append(line)
+
     def register_evidence(self, **fields: str) -> dict[str, Any]:
         return self._call("registerEvidence", **fields)
 
@@ -119,7 +133,52 @@ class FabricClient:
     def get_transaction(self, transaction_id: str) -> dict[str, Any]:
         return self._call("getTransaction", transactionId=transaction_id)
 
+    def health_check(self) -> dict[str, Any]:
+        required_vars = [
+            self.settings.fabric_gateway_url, self.settings.fabric_channel,
+            self.settings.fabric_chaincode, self.settings.fabric_cert_path,
+            self.settings.fabric_key_path, self.settings.fabric_tls_cert_path,
+            self.settings.fabric_msp_id, self.settings.fabric_peer_endpoint,
+            self.settings.fabric_peer_host_alias
+        ]
+        if not all(required_vars):
+            return {
+                "status": "misconfigured",
+                "channel": self.settings.fabric_channel,
+                "chaincode": self.settings.fabric_chaincode,
+                "reason": "Missing required Fabric environment variables"
+            }
+        for name, file_path in [
+            ("cert", self.settings.fabric_cert_path),
+            ("key", self.settings.fabric_key_path),
+            ("tls", self.settings.fabric_tls_cert_path)
+        ]:
+            if not Path(file_path).exists():
+                return {
+                    "status": "misconfigured",
+                    "channel": self.settings.fabric_channel,
+                    "chaincode": self.settings.fabric_chaincode,
+                    "reason": f"File not found for {name} at {file_path}"
+                }
+        try:
+            with self._lock:
+                if self._process is None or self._process.poll() is not None:
+                    self._process = self._start()
+            return {
+                "status": "connected",
+                "channel": self.settings.fabric_channel,
+                "chaincode": self.settings.fabric_chaincode
+            }
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "channel": self.settings.fabric_channel,
+                "chaincode": self.settings.fabric_chaincode,
+                "reason": str(exc)
+            }
+
 
 @lru_cache
 def get_fabric_client() -> FabricClient:
     return FabricClient()
+

@@ -38,15 +38,22 @@ def shutdown() -> None:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    fabric_status = get_fabric_client().health_check()
+    return {"status": "ok", "fabric": fabric_status}
 
 
 @app.get("/health/ready")
-def readiness() -> dict[str, str]:
+def readiness() -> dict[str, Any]:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database is unavailable") from exc
-    return {"status": "ready"}
+    
+    fabric_status = get_fabric_client().health_check()
+    return {
+        "status": "ready",
+        "database": "connected",
+        "fabric": fabric_status
+    }

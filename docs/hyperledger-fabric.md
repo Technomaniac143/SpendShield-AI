@@ -1,54 +1,126 @@
-# Hyperledger Fabric provenance
+# Hyperledger Fabric Provenance Architecture
 
-## Architecture
 PostgreSQL remains the application source of truth. PDFs stay in MinIO/S3; only SHA-256 fingerprints and minimal procurement event metadata are sent to Fabric. Fabric runs the immutable provenance ledger on `spendchannel` with the `spendshield` chaincode.
 
-The backend uses `app/integrations/blockchain/fabric_client.py` as a transport adapter. It maintains one JSON-lines Node worker using the official `@hyperledger/fabric-gateway` package and configured Org1 credentials. There is no in-memory or simulated ledger.
+The backend uses `app/integrations/blockchain/fabric_client.py` as a transport adapter. It maintains one JSON-lines Node worker using the official `@hyperledger/fabric-gateway` package and configured Org1 credentials.
 
-## Network setup on Windows
-Use WSL2 or Git Bash with Docker Desktop running. From the `fabric-samples/test-network` directory:
+## Architecture Flow
 
+```
++------------------+       PDF Upload       +---------------+
+|   Upload Client  |----------------------->| SpendShield   |
++------------------+                        | FastAPI Host  |
+                                            +---------------+
+                                                    |
+                                            Save    | Compute SHA-256
+                                            PDF     v & Queue Outbox
++------------------+                        +---------------+
+|   MinIO/S3       |<-----------------------|  PostgreSQL   |
++------------------+                        +---------------+
+                                                    |
+                                            Process | Background Worker
+                                            Outbox  v
+                                            +---------------+
+                                            | Gateway Node  |
+                                            | gateway.js    |
+                                            +---------------+
+                                                    |
+                                    Submit  | ClientIdentity (CID)
+                                    Tx      v Enforces Org1MSP & Roles
+                                            +---------------+
+                                            | Hyperledger   |
+                                            | spendshield   |
+                                            | Chaincode     |
+                                            +---------------+
+```
+
+---
+
+## Hardened Security & Design Features
+
+### 1. Client Identity & Access Control
+- **MSP Validation:** The chaincode strictly validates the caller's MSP ID using `fabric-shim`'s `ClientIdentity`. Write actions are rejected if the caller is not from the authorized `Org1MSP`.
+- **Role-Based Access Control (RBAC):** Critical write operations (`RegisterEvidence`) require the caller to possess the `writer` role (or `admin`) mapped via certificate attributes (`role` or `spendshield.role`).
+- **Least Privilege:** Public read actions (`GetEvidence`, `VerifyEvidence`, `GetEvidenceHistory`) require a valid channel participant certificate but do not require write-level permissions.
+
+### 2. Strict Input & Validation Rules
+- **Event ID Validation:** Must match `^[A-Za-z0-9._:-]+$` with a maximum length of 256 characters.
+- **Tenant ID Validation:** Multi-tenant isolation is supported by isolating keys and verifying that tenant IDs conform to event ID structure constraints.
+- **Event Type Allowlist:** Only approved SpendShield event types are accepted:
+  - `INVOICE_REGISTERED`, `GRN_REGISTERED`, `PAYMENT_APPROVED`, `PAYMENT_BLOCKED`
+  - `DISPUTE_CREATED`, `DOCUMENT_VERIFIED`, `DOCUMENT_INTEGRITY_FAILED`
+  - `RECOMMENDATION_ACCEPTED`, `RECOMMENDATION_REJECTED`, `OUTCOME_RECORDED`
+- **Hash Integrity:** Hashes (document and metadata) must be valid 64-character hexadecimal SHA-256 strings.
+- **Timestamp Format:** Input dates must strictly conform to ISO-8601 formatting (`YYYY-MM-DDTHH:mm:ssZ` or with offset).
+- **Size Guardrails:** All inputs have a maximum character limit of 256 to prevent Denial of Service (DoS) memory attacks.
+
+### 3. Execution Determinism & Stable Serialization
+- **Stable JSON Serialization:** Implements a recursive canonical stringify function (`stableStringify`) in the chaincode. This ensures consistent byte representations on all peers regardless of object property ordering, preventing consensus mismatch.
+- **No Non-Deterministic Functions:** Banned JavaScript features such as `Date.now()`, `Math.random()`, or network calls are completely absent from smart contract code.
+
+### 4. Safe History Query Guardrails
+- **Max History Limit:** A hard limit of `100` historical versions is enforced in `GetEvidenceHistory` to prevent Node OOM memory exhaustion.
+- **Safe Iterators:** Iterators are wrapped in `try/finally` blocks ensuring that they are closed cleanly.
+- **JSON Error Tolerance:** Malformed or corrupted historical entries are gracefully captured and returned with diagnostic metadata instead of crashing the chaincode execution.
+
+### 5. Safe Transaction Verification (gateway.js)
+- **Validation Code Bounds Checking:** Resolves transaction status with exact bounds checking on validation flag bitmasks.
+- **Status Mapping:** Provides explicit mapping to `VALID`, `INVALID`, `UNAVAILABLE`, or `NOT_FOUND` statuses, preventing invalid transactions from appearing as successful commitments.
+
+---
+
+## PowerShell Configuration Script
+
+You can use the following PowerShell snippet to prompt for Fabric gateway settings and configure your environment:
+
+```powershell
+# Set Default Environment Variables
+$env:FABRIC_GATEWAY_URL = Read-Host -Prompt "Enter FABRIC_GATEWAY_URL [grpc://localhost:7051]" -DefaultValue "grpc://localhost:7051"
+$env:FABRIC_CHANNEL = Read-Host -Prompt "Enter FABRIC_CHANNEL [spendchannel]" -DefaultValue "spendchannel"
+$env:FABRIC_CHAINCODE = Read-Host -Prompt "Enter FABRIC_CHAINCODE [spendshield]" -DefaultValue "spendshield"
+$env:FABRIC_CERT_PATH = Read-Host -Prompt "Enter FABRIC_CERT_PATH"
+$env:FABRIC_KEY_PATH = Read-Host -Prompt "Enter FABRIC_KEY_PATH"
+$env:FABRIC_TLS_CERT_PATH = Read-Host -Prompt "Enter FABRIC_TLS_CERT_PATH"
+$env:FABRIC_MSP_ID = Read-Host -Prompt "Enter FABRIC_MSP_ID [Org1MSP]" -DefaultValue "Org1MSP"
+$env:FABRIC_PEER_ENDPOINT = Read-Host -Prompt "Enter FABRIC_PEER_ENDPOINT [localhost:7051]" -DefaultValue "localhost:7051"
+$env:FABRIC_PEER_HOST_ALIAS = Read-Host -Prompt "Enter FABRIC_PEER_HOST_ALIAS [peer0.org1.example.com]" -DefaultValue "peer0.org1.example.com"
+$env:FABRIC_HELPER_PATH = "fabric/client/gateway.js"
+
+# Verify File Paths
+foreach ($pathVar in ("FABRIC_CERT_PATH", "FABRIC_KEY_PATH", "FABRIC_TLS_CERT_PATH")) {
+    $val = Get-Item -Path (Get-ItemEnv $pathVar) -ErrorAction SilentlyContinue
+    if (-not $val) {
+        Write-Warning "Warning: Path for $pathVar does not exist locally."
+    }
+}
+```
+
+---
+
+## Local Development & Docker Commands
+
+### 1. Build and Run Infrastructure
+From the project root:
+```bash
+docker compose up -d
+```
+
+### 2. Start Hyperledger Fabric Local Network
+Within `fabric-samples/test-network`:
 ```bash
 ./network.sh down
 ./network.sh up createChannel -c spendchannel -ca
-./network.sh deployCC -ccn spendshield -ccp /mnt/d/Hackfusion/SpendShield-AI/fabric/chaincode/spendshield -ccl javascript -c spendchannel
+./network.sh deployCC -ccn spendshield -ccp /path/to/SpendShield-AI/fabric/chaincode/spendshield -ccl javascript -c spendchannel
 ```
 
-Install dependencies once:
-
+### 3. Deploy Node.js Dependencies
 ```bash
-cd /mnt/d/Hackfusion/SpendShield-AI/fabric/chaincode/spendshield && npm install
-cd /mnt/d/Hackfusion/SpendShield-AI/fabric/client && npm install
-cd /mnt/d/Hackfusion/SpendShield-AI/backend && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-alembic upgrade head
+cd fabric/chaincode/spendshield && npm install
+cd ../../client && npm install
 ```
 
-Set the paths in `backend/.env` to the Org1 certificate, private key, and TLS CA certificate from `fabric-samples/test-network/organizations`. Never commit those files.
-
-## Ledger schema and operations
-Each `eventId` is a unique world-state key. `RegisterEvidence` validates required fields, supported event types, SHA-256 formats, duplicate keys, and writes deterministic JSON containing the supplied timestamp plus the actual `ctx.stub.getTxID()`. It emits `EvidenceRegistered`. `GetEvidence`, `GetEvent`, `VerifyEvidence`, `EvidenceExists`, and `GetEvidenceHistory` are chaincode operations. Corrections are new event IDs; no update function exists.
-
-## Application flow
-For a document upload, the server stores the PDF in S3/MinIO and calculates SHA-256. PostgreSQL atomically stores the evidence row and a `fabric_outbox` command. `python scripts/run_fabric_worker.py` submits the command through the persistent Gateway worker and stores the actual Fabric transaction ID. A failed submission remains pending with durable retry state. Block metadata is resolved with `getBlockByTransactionId` and a SHA-256 hash of the real Fabric block header; it is never invented.
-
-## API
-- `POST /api/v1/evidence/{event_id}/register` (multipart PDF upload)
-- `GET /api/v1/evidence/{event_id}` (tenant derived from bearer principal)
-- `POST /api/v1/evidence/{event_id}/verify`
-- `GET /api/v1/evidence/{event_id}/history`
-- `POST /api/v1/evidence/{event_id}/simulate-modification`
-- `GET /api/v1/evidence/{event_id}/blockchain`
-
-All routes require `Authorization: Bearer <signed principal token>`. Tenant and actor values are derived server-side. The client never supplies the authoritative document hash; verification reads the stored PDF and compares its server-side hash to the hash returned by Fabric.
-
-## Demo
-Start Fabric, configure `.env`, run the migration, then start the backend and worker from `backend`:
-
+### 4. Execute Backend Tests
 ```bash
-uvicorn app.main:app --reload --port 8000
-python scripts/run_fabric_worker.py
+cd backend
+python -m pytest
 ```
-
-Register a SHA-256 evidence event, query it, verify the same hash, submit the simulated modification endpoint, and query history. The history contains the original Fabric transaction and the original state remains unchanged. Use Fabric CLI queries against `spendchannel` to inspect committed blocks and transaction validation.
-
-Reset the network with `./network.sh down`; recreate it with the setup commands above. Common failures are missing Docker Desktop, incorrect WSL path conversion, expired Fabric certificates, wrong `FABRIC_PEER_HOST_ALIAS`, and a chaincode package path that is not visible inside the Docker environment.
