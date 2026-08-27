@@ -9,6 +9,9 @@ from app.core.config import get_settings
 class ObjectStorage(Protocol):
     def put(self, key: str, content: bytes, content_type: str = "application/pdf") -> str: ...
     def get(self, key: str) -> bytes: ...
+    def delete(self, key: str) -> None: ...
+    def hash(self, key: str) -> str: ...
+    def get_stream(self, key: str): ...
 
 
 class S3ObjectStorage:
@@ -25,6 +28,19 @@ class S3ObjectStorage:
     def get(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)
         return response["Body"].read()
+
+    def get_stream(self, key: str):
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def hash(self, key: str) -> str:
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        digest = sha256()
+        for chunk in iter(lambda: response["Body"].read(1024 * 1024), b""):
+            digest.update(chunk)
+        return digest.hexdigest()
 
 
 def document_hash(content: bytes) -> str:

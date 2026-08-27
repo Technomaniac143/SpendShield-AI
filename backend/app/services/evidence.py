@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,8 @@ from app.integrations.storage import ObjectStorage, document_hash
 from app.models import Evidence, FabricOutbox, OutboxStatus
 from app.schemas import RegisterEvidenceRequest
 from app.utils import is_sha256
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EVENT_TYPES = {
     "INVOICE_REGISTERED", "GRN_REGISTERED", "PAYMENT_APPROVED", "PAYMENT_BLOCKED",
@@ -66,14 +69,25 @@ class EvidenceService:
             self.db.commit()
         except IntegrityError as exc:
             self.db.rollback()
+            self._cleanup_object(storage_key)
             raise ValueError("event_id is already registered") from exc
+        except Exception:
+            self.db.rollback()
+            self._cleanup_object(storage_key)
+            raise
         return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}
+
+    def _cleanup_object(self, storage_key: str) -> None:
+        try:
+            self.storage.delete(storage_key)
+        except Exception:
+            logger.exception("failed to clean up evidence object", extra={"storage_key": storage_key})
 
     def verify(self, event_id: str, principal: Principal) -> dict[str, str]:
         record = self.db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id, Evidence.tenant_id == principal.tenant_id))
         if record is None:
             return {"status": "NOT_REGISTERED", "eventId": event_id}
-        current_hash = document_hash(self.storage.get(record.storage_key))
+        current_hash = self.storage.hash(record.storage_key)
         registered = self.fabric.get_evidence(event_id)
         if registered.get("status") != "FOUND":
             return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}

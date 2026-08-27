@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import threading
+import queue
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ class FabricClient:
         self.settings = settings or get_settings()
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
+        self._responses: queue.Queue[str | None] = queue.Queue()
 
     def _helper_path(self) -> Path:
         helper = Path(self.settings.fabric_helper_path)
@@ -42,10 +44,13 @@ class FabricClient:
             "FABRIC_PEER_HOST_ALIAS": self.settings.fabric_peer_host_alias,
         }
         try:
-            return subprocess.Popen(
+            process = subprocess.Popen(
                 ["node", str(self._helper_path())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, **environment},
+                stderr=subprocess.DEVNULL, text=True, bufsize=1, env={**os.environ, **environment},
             )
+            self._responses = queue.Queue()
+            threading.Thread(target=self._read_responses, args=(process,), daemon=True).start()
+            return process
         except OSError as exc:
             raise FabricUnavailable("Node.js Fabric Gateway worker is unavailable") from exc
 
@@ -53,18 +58,20 @@ class FabricClient:
         with self._lock:
             if self._process is None or self._process.poll() is not None:
                 self._process = self._start()
-            assert self._process.stdin is not None and self._process.stdout is not None
+            assert self._process.stdin is not None
             try:
                 self._process.stdin.write(json.dumps({"operation": operation, "arguments": arguments}) + "\n")
                 self._process.stdin.flush()
-                line = self._process.stdout.readline()
+                line = self._responses.get(timeout=20)
             except (OSError, BrokenPipeError) as exc:
                 self._discard_process()
                 raise FabricUnavailable("Fabric Gateway worker connection failed") from exc
-            if not line:
-                error = self._process.stderr.read().strip() if self._process.stderr else ""
+            except queue.Empty as exc:
                 self._discard_process()
-                raise FabricUnavailable(error or "Fabric Gateway worker exited")
+                raise FabricUnavailable("Fabric Gateway request timed out") from exc
+            if not line:
+                self._discard_process()
+                raise FabricUnavailable("Fabric Gateway worker exited")
             try:
                 response = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -83,7 +90,19 @@ class FabricClient:
     def _discard_process(self) -> None:
         if self._process is not None:
             self._process.terminate()
+            try:
+                self._process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
             self._process = None
+
+    def _read_responses(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            self._responses.put(None)
+            return
+        for line in process.stdout:
+            self._responses.put(line)
+        self._responses.put(None)
 
     def register_evidence(self, **fields: str) -> dict[str, Any]:
         return self._call("registerEvidence", **fields)
