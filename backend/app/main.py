@@ -1,3 +1,4 @@
+from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,7 +14,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in get_settings().cors_origins.split(",") if origin.strip()],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
 
@@ -39,7 +40,11 @@ def shutdown() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    fabric_status = get_fabric_client().health_check()
+    settings = get_settings()
+    if settings.evidence_ledger_backend == "database":
+        fabric_status = {"status": "disabled", "channel": settings.fabric_channel, "chaincode": settings.fabric_chaincode}
+    else:
+        fabric_status = get_fabric_client().health_check()
     return {"status": "ok", "fabric": fabric_status}
 
 
@@ -51,7 +56,11 @@ def readiness() -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database is unavailable") from exc
     
-    fabric_status = get_fabric_client().health_check()
+    settings = get_settings()
+    if settings.evidence_ledger_backend == "database":
+        fabric_status = {"status": "disabled", "channel": settings.fabric_channel, "chaincode": settings.fabric_chaincode}
+    else:
+        fabric_status = get_fabric_client().health_check()
     return {
         "status": "ready",
         "database": "connected",

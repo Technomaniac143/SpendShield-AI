@@ -16,6 +16,7 @@ def test_service_passes_hashes_only_and_returns_real_transaction_id():
     fabric = Mock()
     storage = Mock()
     service = EvidenceService(db, fabric, storage)
+    service.settings.evidence_ledger_backend = "fabric"
     response = service.register("EV-001", request(), Principal("tenant-a", "user-1"), b"pdf")
     assert response == {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": "EV-001"}
     storage.put.assert_called_once()

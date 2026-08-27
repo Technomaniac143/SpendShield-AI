@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     fabric_peer_endpoint: str = "localhost:7051"
     fabric_peer_host_alias: str = "peer0.org1.example.com"
     fabric_helper_path: str = "fabric/client/gateway.js"
+    evidence_ledger_backend: str = "database"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

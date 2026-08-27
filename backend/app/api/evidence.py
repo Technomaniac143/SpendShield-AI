@@ -80,6 +80,12 @@ def history(event_id: str, principal: Principal = Depends(require_permission("ev
     owner = db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id, Evidence.tenant_id == principal.tenant_id))
     if owner is None:
         return {"status": "NOT_REGISTERED", "eventId": event_id}
+
+    if get_settings().evidence_ledger_backend == "database":
+        from app.services.evidence_ledger import EvidenceLedgerService
+        ledger = EvidenceLedgerService(db)
+        return ledger.get_history(event_id, principal.tenant_id)
+
     try:
         return fabric.get_history(event_id) | {"tenantId": principal.tenant_id}
     except FabricUnavailable as exc:
@@ -101,6 +107,21 @@ def blockchain(event_id: str, principal: Principal = Depends(require_permission(
     record = db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id, Evidence.tenant_id == principal.tenant_id))
     if record is None:
         return {"status": "NOT_REGISTERED", "eventId": event_id}
+
+    if get_settings().evidence_ledger_backend == "database":
+        if not record.fabric_transaction_id:
+            return {"status": record.verification_status, "eventId": event_id, "fabric": None}
+        from app.services.evidence_ledger import EvidenceLedgerService
+        ledger = EvidenceLedgerService(db)
+        metadata = ledger.get_transaction(record.fabric_transaction_id)
+        if metadata.get("status") == "NOT_FOUND":
+            return {"status": record.verification_status, "eventId": event_id, "fabric": None}
+        return {"evidence_id": record.evidence_id, "record_id": record.record_id, "verification_status": record.verification_status,
+                "fabric": {"channel": metadata["channel"], "chaincode": metadata["chaincode"],
+                           "transaction_id": metadata["transactionId"], "block_number": None,
+                           "block_hash": None, "timestamp": metadata.get("timestamp"),
+                           "validation_status": 0}}
+
     if not record.fabric_transaction_id:
         return {"status": record.verification_status, "eventId": event_id, "fabric": None}
     try:

@@ -32,3 +32,6 @@ class Evidence(Base):
     fabric_chaincode: Mapped[str] = mapped_column(String(128))
     fabric_block_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fabric_block_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    record_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+

@@ -42,6 +42,33 @@ class EvidenceService:
         )
         if not is_sha256(metadata_hash):
             raise ValueError("metadata_hash must be a SHA-256 hexadecimal value")
+
+        if self.settings.evidence_ledger_backend == "database":
+            from app.services.evidence_ledger import EvidenceLedgerService
+            ledger = EvidenceLedgerService(self.db)
+            storage_key = f"{principal.tenant_id}/{event_id}/{uuid4().hex}.pdf"
+            self.storage.put(storage_key, document)
+            payload = {
+                "eventId": event_id,
+                "tenantId": principal.tenant_id,
+                "recordId": request.record_id,
+                "eventType": request.event_type,
+                "documentHash": content_hash,
+                "actor": principal.actor,
+                "timestamp": request.timestamp,
+                "metadataHash": metadata_hash,
+                "storageKey": storage_key
+            }
+            try:
+                res = ledger.register(payload)
+                return {"status": "REGISTERED", "eventId": event_id, "transactionId": res["transactionId"]}
+            except ValueError as exc:
+                self._cleanup_object(storage_key)
+                raise
+            except Exception:
+                self._cleanup_object(storage_key)
+                raise
+
         existing = self.db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id))
         if existing:
             if existing.tenant_id != principal.tenant_id:
@@ -83,11 +110,24 @@ class EvidenceService:
         except Exception:
             logger.exception("failed to clean up evidence object", extra={"storage_key": storage_key})
 
-    def verify(self, event_id: str, principal: Principal) -> dict[str, str]:
+    def verify(self, event_id: str, principal: Principal) -> dict[str, Any]:
         record = self.db.scalar(select(Evidence).where(Evidence.fabric_event_id == event_id, Evidence.tenant_id == principal.tenant_id))
         if record is None:
             return {"status": "NOT_REGISTERED", "eventId": event_id}
         current_hash = self.storage.hash(record.storage_key)
+
+        if self.settings.evidence_ledger_backend == "database":
+            from app.services.evidence_ledger import EvidenceLedgerService
+            ledger = EvidenceLedgerService(self.db)
+            res = ledger.verify_evidence(event_id, current_hash, principal.tenant_id)
+            if res.get("status") == "VERIFIED":
+                record.verification_status = "VERIFIED"
+                self.db.commit()
+            elif res.get("status") in ("TAMPERED", "INTEGRITY_FAILURE"):
+                record.verification_status = "INTEGRITY_FAILURE"
+                self.db.commit()
+            return res
+
         registered = self.fabric.get_evidence(event_id)
         if registered.get("status") != "FOUND":
             return {"status": "PENDING_BLOCKCHAIN_VERIFICATION", "eventId": event_id}
