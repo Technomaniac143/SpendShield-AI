@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 font-sans antialiased;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply text-slate-900 tracking-tight;
+  }
+}
+
+@layer components {
+  /* Minimal, professional, data-dense styling */
+  .card-base {
+    @apply bg-white border border-slate-200 rounded-lg shadow-sm;
+  }
+  
+  .glass-panel {
+    @apply bg-white/95 backdrop-blur-sm border border-slate-200;
+  }
+}
+
+/* React Flow custom variables to match enterprise theme */
+.react-flow {
+  --xy-edge-stroke: #cbd5e1;
+  --xy-edge-stroke-selected: #3b82f6;
+  --xy-node-border: #e2e8f0;
+  --xy-node-border-selected: #3b82f6;
+}

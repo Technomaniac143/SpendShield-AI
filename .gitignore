@@ -1,0 +1,23 @@
+
+!.env.example
+backend/.venv/
+.venv/
+*.db
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+# fabric/credentials/
+# fabric/wallet/
+# fabric/**/wallets/
+# fabric/**/keystore/
+# fabric/**/*.pem
+# fabric/**/*.key
+# fabric/**/*.crt
+# fabric/**/*.csr
+# fabric/**/*.p12
+# fabric/**/*.id
+# fabric/**/*.log
+# *.pem
+# *.key
+.venv/
