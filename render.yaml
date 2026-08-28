@@ -1,0 +1,102 @@
+databases:
+  - name: spendshield-db
+    databaseName: spendshield
+    user: spendshield
+    plan: free
+    region: oregon
+
+services:
+  # ──────────────────────────────────────────────────────────
+  # MinIO — S3-compatible object storage
+  # ──────────────────────────────────────────────────────────
+  - type: web
+    name: spendshield-minio
+    region: oregon
+    plan: starter
+    image:
+      url: docker.io/minio/minio:latest
+    disk:
+      name: minio-data
+      mountPath: /data
+      sizeGB: 10
+    startCommand: minio server /data --console-address ":9001"
+    healthCheckPath: /minio/health/live
+    envVars:
+      - key: MINIO_ROOT_USER
+        sync: false
+      - key: MINIO_ROOT_PASSWORD
+        sync: false
+
+  # ──────────────────────────────────────────────────────────
+  # Backend — FastAPI (Docker)
+  # ──────────────────────────────────────────────────────────
+  - type: web
+    name: spendshield-backend
+    region: oregon
+    plan: starter
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: spendshield-db
+          property: connectionString
+      - key: AUTH_SECRET
+        sync: false
+      - key: ACCESS_TOKEN_TTL_SECONDS
+        value: "900"
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: "30"
+      - key: MAX_DOCUMENT_BYTES
+        value: "26214400"
+      - key: MAX_INGESTION_BYTES
+        value: "104857600"
+      - key: INGESTION_WORKER_MODE
+        value: background
+      - key: CORS_ORIGINS
+        value: https://spendshield-frontend.onrender.com
+      - key: STORAGE_ENDPOINT_URL
+        value: https://spendshield-minio.onrender.com
+      - key: STORAGE_ACCESS_KEY
+        sync: false
+      - key: STORAGE_SECRET_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        value: spendshield-evidence
+      - key: EVIDENCE_LEDGER_BACKEND
+        value: database
+      - key: MARKET_INTELLIGENCE_ENABLED
+        value: "true"
+      - key: MARKET_INTELLIGENCE_MODE
+        value: mock
+      - key: MARKET_COLLECTION_TIMEOUT
+        value: "15"
+      - key: MARKET_COLLECTION_MAX_RESULTS
+        value: "25"
+      - key: MARKET_COLLECTION_RATE_LIMIT
+        value: "1.0"
+      - key: RUN_MARKET_LIVE
+        value: "0"
+
+  # ──────────────────────────────────────────────────────────
+  # Frontend — React/Vite Static Site
+  # ──────────────────────────────────────────────────────────
+  - type: web
+    name: spendshield-frontend
+    region: oregon
+    plan: free
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://spendshield-backend.onrender.com/api/v1
+      - key: NODE_VERSION
+        value: "20"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
