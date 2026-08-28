@@ -12,14 +12,17 @@ interface EvidenceDetail {
   recordId: string;
   eventType: string;
   timestamp: string;
-  sourceType: string;
-  sourceId: string | null;
+  sourceType?: string;
+  sourceId?: string | null;
   metadataHash: string | null;
   documentHash: string;
   previousHash: string | null;
   recordHash: string;
   verificationStatus: string;
   status: string;
+  actor?: string;
+  sequenceNumber?: number | null;
+  fabricTransactionId?: string | null;
 }
 
 export function Evidence() {
@@ -56,30 +59,51 @@ export function Evidence() {
   const loadEvidenceData = async (eventId: string) => {
     setLoading(true);
     setError(null);
+    setEvidence(null);
+    setHistoryList([]);
+    setBlockchainInfo(null);
+    setIsSimulated(false);
+    setSimulatedHash(null);
     try {
       const data = await evidenceApi.getEvidence(eventId);
       if (data.status === 'NOT_REGISTERED') {
         setEvidence(null);
-        setError(`Evidence event ID "${eventId}" is not registered in the database ledger.`);
+        setError(`Event ID "${eventId}" is not registered in the ledger. Register it using the form on the left.`);
       } else {
-        setEvidence(data);
+        setEvidence(data as EvidenceDetail);
         // Add to recent list if not already present
         if (!eventsList.includes(eventId)) {
           setEventsList(prev => [eventId, ...prev]);
         }
-        // Load history and blockchain
+        // Load history and blockchain (best-effort — don't fail the main load)
         try {
           const hist = await evidenceApi.getHistory(eventId);
           setHistoryList(hist.history || []);
+        } catch (e) {
+          console.warn('Failed to load history:', e);
+        }
+        try {
           const chain = await evidenceApi.getBlockchain(eventId);
           setBlockchainInfo(chain.fabric);
         } catch (e) {
-          console.warn('Failed to load history or blockchain details:', e);
+          console.warn('Failed to load blockchain metadata:', e);
         }
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Failed to fetch evidence.');
+      const status = err.response?.status;
+      if (status === 401) {
+        setError('Session expired. Please log in again.');
+      } else {
+        const detail = err.response?.data?.detail;
+        setError(
+          Array.isArray(detail)
+            ? detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ')
+            : typeof detail === 'string'
+            ? detail
+            : 'Failed to fetch evidence.'
+        );
+      }
       setEvidence(null);
     } finally {
       setLoading(false);

@@ -1,18 +1,22 @@
 import { apiClient } from './api';
 
 export interface EvidenceResponse {
+  status: string;
   eventId: string;
+  tenantId?: string;
   recordId: string;
   eventType: string;
   timestamp: string;
-  sourceType: string;
-  sourceId: string | null;
-  metadataHash: string | null;
+  sourceType?: string;
+  sourceId?: string | null;
+  metadataHash?: string | null;
   documentHash: string;
   previousHash: string | null;
   recordHash: string;
   verificationStatus: string;
-  status: string;
+  fabricTransactionId?: string | null;
+  actor?: string;
+  sequenceNumber?: number | null;
 }
 
 export const evidenceApi = {
@@ -31,7 +35,12 @@ export const evidenceApi = {
   },
 
   verify: async (eventId: string) => {
-    const response = await apiClient.post<{ status: string; detail?: string }>(`/evidence/${eventId}/verify`);
+    const response = await apiClient.post<{
+      status: string;
+      detail?: string;
+      depth_checked?: number;
+      reason?: string;
+    }>(`/evidence/${eventId}/verify`);
     return response.data;
   },
 
@@ -48,5 +57,5 @@ export const evidenceApi = {
   simulateModification: async (eventId: string) => {
     const response = await apiClient.post(`/evidence/${eventId}/simulate-modification`);
     return response.data;
-  }
+  },
 };

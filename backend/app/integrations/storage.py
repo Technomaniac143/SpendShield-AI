@@ -47,11 +47,30 @@ def document_hash(content: bytes) -> str:
     return sha256(content).hexdigest()
 
 
-def create_storage() -> S3ObjectStorage:
+def create_storage() -> "ObjectStorage":
+    """
+    Return an object storage adapter.
+
+    Resolution order:
+    1. If S3 credentials are configured → use S3ObjectStorage.
+    2. Otherwise (typically database-ledger mode in dev) → use
+       LocalObjectStorage so the server starts without MinIO.
+    """
     settings = get_settings()
-    if not settings.storage_access_key or not settings.storage_secret_key:
-        raise RuntimeError("object storage credentials are required")
-    client = boto3.client("s3", endpoint_url=settings.storage_endpoint_url,
-                          aws_access_key_id=settings.storage_access_key,
-                          aws_secret_access_key=settings.storage_secret_key)
-    return S3ObjectStorage(client, settings.storage_bucket)
+    if settings.storage_access_key and settings.storage_secret_key:
+        client = boto3.client(
+            "s3",
+            endpoint_url=settings.storage_endpoint_url,
+            aws_access_key_id=settings.storage_access_key,
+            aws_secret_access_key=settings.storage_secret_key,
+        )
+        return S3ObjectStorage(client, settings.storage_bucket)
+
+    # Fallback: local filesystem storage (development / database-mode only)
+    from app.integrations.storage_local import LocalObjectStorage
+    import logging
+    logging.getLogger(__name__).warning(
+        "No S3 credentials configured – using local filesystem storage. "
+        "Set STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY for production."
+    )
+    return LocalObjectStorage()

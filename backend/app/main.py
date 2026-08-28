@@ -15,8 +15,11 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
     settings = get_settings()
-    if settings.evidence_ledger_backend == "blockchain":
-        get_fabric_client().close()
+    if settings.evidence_ledger_backend == "fabric":
+        try:
+            get_fabric_client().close()
+        except Exception:
+            pass  # best-effort teardown
 
 
 app = FastAPI(title="SpendShield AI", lifespan=lifespan)

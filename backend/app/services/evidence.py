@@ -21,6 +21,9 @@ SUPPORTED_EVENT_TYPES = {
     "INVOICE_REGISTERED", "GRN_REGISTERED", "PAYMENT_APPROVED", "PAYMENT_BLOCKED",
     "DISPUTE_CREATED", "DOCUMENT_VERIFIED", "DOCUMENT_INTEGRITY_FAILED",
     "RECOMMENDATION_ACCEPTED", "RECOMMENDATION_REJECTED", "OUTCOME_RECORDED",
+    # Frontend-friendly aliases
+    "GOODS_RECEIVED",      # alias for GRN_REGISTERED
+    "PAYMENT_COMPLETED",   # alias for PAYMENT_APPROVED
 }
 
 
@@ -144,7 +147,19 @@ class EvidenceService:
 
     @staticmethod
     def to_response(record: Evidence, status: str) -> dict[str, Any]:
-        return {"status": status, "eventId": record.fabric_event_id, "tenantId": record.tenant_id,
-                "recordId": record.record_id, "eventType": record.event_type, "documentHash": record.document_hash,
-                "actor": record.created_by, "timestamp": record.event_timestamp, "metadataHash": record.metadata_hash,
-                "fabricTransactionId": record.fabric_transaction_id}
+        return {
+            "status": status,
+            "eventId": record.fabric_event_id,
+            "tenantId": record.tenant_id,
+            "recordId": record.record_id,
+            "eventType": record.event_type,
+            "documentHash": record.document_hash,
+            "actor": record.created_by,
+            "timestamp": record.event_timestamp,
+            "metadataHash": record.metadata_hash,
+            "fabricTransactionId": record.fabric_transaction_id,
+            # Hash-chain fields required by the frontend Evidence panel
+            "previousHash": record.previous_hash,
+            "recordHash": record.record_hash,
+            "verificationStatus": record.verification_status,
+        }
