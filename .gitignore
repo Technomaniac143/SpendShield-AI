@@ -1,4 +1,4 @@
-.env
+
 !.env.example
 backend/.venv/
 .venv/
@@ -21,4 +21,3 @@ node_modules/
 # *.pem
 # *.key
 .venv/
-.env.example    
