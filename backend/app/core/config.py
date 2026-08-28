@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     fabric_helper_path: str = "fabric/client/gateway.js"
     evidence_ledger_backend: str = "database"
 
+    market_intelligence_enabled: bool = True
+    market_intelligence_mode: str = "mock"
+    market_collection_timeout: int = 15
+    market_collection_max_results: int = 25
+    market_collection_rate_limit: float = 1.0
+    market_user_agent: str = "SpendShield-MarketIntelligence/1.0"
+    run_market_live: int = 0
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def model_post_init(self, __context) -> None:

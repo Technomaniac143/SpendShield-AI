@@ -34,4 +34,5 @@ class Evidence(Base):
     fabric_block_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     record_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sequence_number: Mapped[int | None] = mapped_column(Integer, autoincrement=True, unique=True, nullable=True)
 

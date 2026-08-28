@@ -15,6 +15,7 @@ import { Evidence } from './pages/Evidence';
 import { Inventory } from './pages/Inventory';
 import { Outcomes } from './pages/Outcomes';
 import { Login } from './pages/Login';
+import { MarketIntelligence } from './pages/MarketIntelligence';
 
 // Placeholder Pages
 const Settings = () => <div className="p-6"><h1 className="text-2xl font-bold">Settings</h1><p className="mt-4 text-slate-500">Platform configuration.</p></div>;
@@ -68,6 +69,7 @@ function App() {
           </Route>
           
           <Route path="evidence" element={<Evidence />} />
+          <Route path="market" element={<MarketIntelligence />} />
           
           <Route path="outcomes" element={<Outcomes />} />
           <Route path="settings" element={<Settings />} />

@@ -43,8 +43,15 @@ def _token_response(db: Session, user: User, refresh: str) -> dict:
 
 
 def login(db: Session, request: LoginRequest) -> dict:
-    user = db.scalar(select(User).where(User.tenant_id == request.tenant_id, User.email == request.email.lower()))
-    tenant = db.get(Tenant, request.tenant_id)
+    tenant_id = request.tenant_id
+    if not tenant_id:
+        user = db.scalar(select(User).where(User.email == request.email.lower()))
+        if user:
+            tenant_id = user.tenant_id
+    else:
+        user = db.scalar(select(User).where(User.tenant_id == tenant_id, User.email == request.email.lower()))
+
+    tenant = db.get(Tenant, tenant_id) if tenant_id else None
     if tenant is None or not tenant.active or user is None or not user.active or not verify_password(request.password, user.password_hash):
         raise AuthenticationError("invalid credentials")
 

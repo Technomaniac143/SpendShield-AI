@@ -4,12 +4,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from sqlalchemy import text
 
-from app.api import auth, evidence, ingestion, procurement, users
+from app.api import auth, evidence, ingestion, procurement, users, market
 from app.core.config import get_settings
 from app.core.database import engine
 from app.integrations.blockchain import get_fabric_client
 
-app = FastAPI(title="SpendShield AI")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    settings = get_settings()
+    if settings.evidence_ledger_backend == "blockchain":
+        get_fabric_client().close()
+
+
+app = FastAPI(title="SpendShield AI", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in get_settings().cors_origins.split(",") if origin.strip()],
@@ -31,11 +41,7 @@ app.include_router(procurement.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(ingestion.router, prefix="/api/v1")
-
-
-@app.on_event("shutdown")
-def shutdown() -> None:
-    get_fabric_client().close()
+app.include_router(market.router, prefix="/api/v1")
 
 
 @app.get("/health")
@@ -45,7 +51,17 @@ def health() -> dict[str, Any]:
         fabric_status = {"status": "disabled", "channel": settings.fabric_channel, "chaincode": settings.fabric_chaincode}
     else:
         fabric_status = get_fabric_client().health_check()
-    return {"status": "ok", "fabric": fabric_status}
+        
+    market_status = {
+        "enabled": settings.market_intelligence_enabled,
+        "mode": settings.market_intelligence_mode,
+        "database": "healthy"
+    }
+    return {
+        "status": "ok", 
+        "fabric": fabric_status,
+        "market_intelligence": market_status
+    }
 
 
 @app.get("/health/ready")
@@ -61,8 +77,15 @@ def readiness() -> dict[str, Any]:
         fabric_status = {"status": "disabled", "channel": settings.fabric_channel, "chaincode": settings.fabric_chaincode}
     else:
         fabric_status = get_fabric_client().health_check()
+        
+    market_status = {
+        "enabled": settings.market_intelligence_enabled,
+        "mode": settings.market_intelligence_mode,
+        "database": "healthy"
+    }
     return {
         "status": "ready",
         "database": "connected",
-        "fabric": fabric_status
+        "fabric": fabric_status,
+        "market_intelligence": market_status
     }

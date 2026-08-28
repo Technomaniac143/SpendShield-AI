@@ -81,6 +81,10 @@ class EvidenceService:
             "eventType": request.event_type, "documentHash": content_hash, "actor": principal.actor,
             "timestamp": request.timestamp, "metadataHash": metadata_hash.lower(),
         }
+        from sqlalchemy import func
+        max_seq = self.db.scalar(select(func.max(Evidence.sequence_number))) or 0
+        next_seq = max_seq + 1
+
         record = Evidence(
             tenant_id=principal.tenant_id, source_type=request.source_type, source_id=request.source_id,
             storage_key=storage_key, record_id=request.record_id, event_type=request.event_type,
@@ -88,6 +92,7 @@ class EvidenceService:
             event_timestamp=request.timestamp, fabric_event_id=event_id,
             fabric_channel=self.settings.fabric_channel, fabric_chaincode=self.settings.fabric_chaincode,
             verification_status="PENDING_BLOCKCHAIN_VERIFICATION",
+            sequence_number=next_seq,
         )
         outbox = FabricOutbox(tenant_id=principal.tenant_id, event_id=event_id, event_type=request.event_type,
                               payload=json.dumps(payload, sort_keys=True), status=OutboxStatus.PENDING)

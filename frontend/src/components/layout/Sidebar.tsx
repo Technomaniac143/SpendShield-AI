@@ -12,7 +12,8 @@ import {
   TrendingUp, 
   Settings,
   ShieldAlert,
-  LogOut
+  LogOut,
+  Globe
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { authApi } from '../../services/auth';
@@ -27,6 +28,7 @@ const navigation = [
   { name: 'Recommendations', href: '/recommendations', icon: Lightbulb },
   { name: 'Evidence', href: '/evidence', icon: ShieldCheck },
   { name: 'Outcomes', href: '/outcomes', icon: TrendingUp },
+  { name: 'Market Intelligence', href: '/market', icon: Globe },
 ];
 
 export function Sidebar() {

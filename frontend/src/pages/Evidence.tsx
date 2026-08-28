@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { StatusBadge } from '../components/common/StatusBadge';
-import { Search, ShieldCheck, ShieldAlert, FileText, Activity, Upload, CheckCircle2, History } from 'lucide-react';
+import { Search, ShieldCheck, ShieldAlert, FileText, Paperclip, Upload, CheckCircle2, History } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { evidenceApi } from '../services/evidence';
 
@@ -27,8 +27,8 @@ export function Evidence() {
   const queryEventId = searchParams.get('eventId');
 
   // List of active/recent verifications (we keep a local list, populated dynamically)
-  const [eventsList, setEventsList] = useState<string[]>(['EV-E2E-1']);
-  const [selectedEventId, setSelectedEventId] = useState<string>(queryEventId || 'EV-E2E-1');
+  const [eventsList, setEventsList] = useState<string[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>(queryEventId || '');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Evidence state
@@ -50,6 +50,7 @@ export function Evidence() {
   const [regSuccess, setRegSuccess] = useState(false);
   const [regError, setRegError] = useState<string | null>(null);
   const [regLoading, setRegLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load selected evidence data
   const loadEvidenceData = async (eventId: string) => {
@@ -86,7 +87,7 @@ export function Evidence() {
   };
 
   useEffect(() => {
-    if (selectedEventId) {
+    if (selectedEventId && selectedEventId.trim()) {
       loadEvidenceData(selectedEventId);
     }
   }, [selectedEventId]);
@@ -154,10 +155,16 @@ export function Evidence() {
         setRegEventId('');
         setRegRecordId('');
         setRegFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
     } catch (err: any) {
       console.error(err);
-      setRegError(err.response?.data?.detail || 'Failed to register evidence. Ensure file is a valid PDF.');
+      const detail = err.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        setRegError(detail.map((d: any) => d.msg || JSON.stringify(d)).join('; '));
+      } else {
+        setRegError(typeof detail === 'string' ? detail : 'Failed to register evidence. Ensure file is a valid PDF.');
+      }
     } finally {
       setRegLoading(false);
     }
@@ -278,13 +285,27 @@ export function Evidence() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">PDF Document</label>
-                  <input 
-                    type="file" 
+                  {/* Hidden native file input — triggered programmatically */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
                     accept="application/pdf"
-                    required
+                    style={{ display: 'none' }}
                     onChange={(e) => setRegFile(e.target.files?.[0] || null)}
-                    className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-info/10 file:text-info hover:file:bg-info/20"
                   />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-md border border-slate-300 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer"
+                  >
+                    <Paperclip className="h-4 w-4 text-slate-500" />
+                    {regFile ? regFile.name : 'Choose PDF file…'}
+                  </button>
+                  {regFile && (
+                    <p className="mt-1 text-xs text-slate-400">
+                      {(regFile.size / 1024).toFixed(1)} KB selected
+                    </p>
+                  )}
                 </div>
                 <Button type="submit" disabled={regLoading} className="w-full">
                   {regLoading ? 'Registering...' : 'Register Evidence'}

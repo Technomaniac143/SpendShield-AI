@@ -4,8 +4,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
+import app.models
 from app.core.database import Base
-from app.models import Evidence, FabricOutbox
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

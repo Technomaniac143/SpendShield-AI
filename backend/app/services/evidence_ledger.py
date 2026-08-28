@@ -24,7 +24,7 @@ class EvidenceLedgerService:
         stmt = (
             select(Evidence.record_hash)
             .where(Evidence.tenant_id == tenant_id)
-            .order_by(desc(Evidence.created_at), desc(Evidence.evidence_id))
+            .order_by(desc(Evidence.sequence_number))
             .limit(1)
         )
         return self.db.scalar(stmt)
@@ -56,6 +56,11 @@ class EvidenceLedgerService:
         rec_hash = generate_record_hash(canonical_payload)
         tx_id = str(uuid4())
 
+        # Calculate sequence number dynamically
+        from sqlalchemy import func
+        max_seq = self.db.scalar(select(func.max(Evidence.sequence_number))) or 0
+        next_seq = max_seq + 1
+
         record = Evidence(
             tenant_id=tenant_id,
             source_type="DOCUMENT",
@@ -72,6 +77,7 @@ class EvidenceLedgerService:
             fabric_chaincode="spendshield",
             previous_hash=prev_hash,
             record_hash=rec_hash,
+            sequence_number=next_seq,
             verification_status="REGISTERED"
         )
 
@@ -128,7 +134,49 @@ class EvidenceLedgerService:
                 "reason": "document hash mismatch"
             }
 
-        # Verify cryptographic integrity of record hash
+        current_hash = evidence_resp["recordHash"]
+        current_prev = evidence_resp["previousHash"]
+        current_event = event_id
+
+        # Pass 1: Fast cycle and presence checking
+        temp_prev = current_prev
+        temp_event = current_event
+        check_visited = {current_hash}
+        depth = 1
+        max_depth = 1000
+        while temp_prev:
+            if temp_prev in check_visited:
+                return {
+                    "status": "TAMPERED",
+                    "eventId": temp_event,
+                    "reason": "cyclic reference detected in ledger chain"
+                }
+            if depth >= max_depth:
+                return {
+                    "status": "TAMPERED",
+                    "eventId": temp_event,
+                    "reason": "maximum traversal depth exceeded"
+                }
+            stmt_prev = select(Evidence).where(Evidence.record_hash == temp_prev)
+            prev_rec = self.db.scalar(stmt_prev)
+            if not prev_rec:
+                return {
+                    "status": "TAMPERED",
+                    "eventId": temp_event,
+                    "reason": "predecessor record not found or link broken"
+                }
+            if tenant_id and prev_rec.tenant_id != tenant_id:
+                return {
+                    "status": "TAMPERED",
+                    "eventId": temp_event,
+                    "reason": "cross-tenant reference attempt rejected"
+                }
+            check_visited.add(temp_prev)
+            temp_event = prev_rec.fabric_event_id
+            temp_prev = prev_rec.previous_hash
+            depth += 1
+
+        # Verify current node integrity
         canonical = {
             "actor": evidence_resp["actor"],
             "documentHash": evidence_resp["documentHash"],
@@ -141,47 +189,59 @@ class EvidenceLedgerService:
             "timestamp": evidence_resp["timestamp"]
         }
         recomputed = generate_record_hash(canonical)
-        if recomputed != evidence_resp["recordHash"]:
+        if recomputed != current_hash:
             return {
                 "status": "TAMPERED",
                 "eventId": event_id,
                 "reason": "record hash mismatch"
             }
-
-        # Verify hash linkage to previous record
-        if evidence_resp["previousHash"]:
-            stmt_prev = select(Evidence).where(Evidence.record_hash == evidence_resp["previousHash"])
-            prev_rec = self.db.scalar(stmt_prev)
-            if not prev_rec:
+            if tenant_id and prev_rec.tenant_id != tenant_id:
                 return {
                     "status": "TAMPERED",
-                    "eventId": event_id,
-                    "reason": "predecessor record not found or link broken"
+                    "eventId": temp_event,
+                    "reason": "cross-tenant reference attempt rejected"
                 }
+            check_visited.add(temp_prev)
+            temp_event = prev_rec.fabric_event_id
+            temp_prev = prev_rec.previous_hash
+            depth += 1
+
+        # Pass 2: Cryptographic integrity checking
+        depth = 1
+        while current_prev:
+            stmt_prev = select(Evidence).where(Evidence.record_hash == current_prev)
+            prev_rec = self.db.scalar(stmt_prev)
+            
             canonical_prev = {
                 "actor": prev_rec.created_by,
                 "documentHash": prev_rec.document_hash,
                 "eventId": prev_rec.fabric_event_id,
                 "eventType": prev_rec.event_type,
-                "metadataHash": prev_rec.metadata_hash,
+                "metadataHash": prev_rec.metadata_hash or "",
                 "previousHash": prev_rec.previous_hash or "",
                 "recordId": prev_rec.record_id,
                 "tenantId": prev_rec.tenant_id,
                 "timestamp": prev_rec.event_timestamp
             }
-            if generate_record_hash(canonical_prev) != evidence_resp["previousHash"]:
+            recomputed_prev = generate_record_hash(canonical_prev)
+            if recomputed_prev != current_prev:
                 return {
                     "status": "TAMPERED",
-                    "eventId": event_id,
+                    "eventId": prev_rec.fabric_event_id,
                     "reason": "predecessor record has been tampered"
                 }
+                
+            current_event = prev_rec.fabric_event_id
+            current_prev = prev_rec.previous_hash
+            depth += 1
 
         return {
             "status": "VERIFIED",
             "eventId": event_id,
             "registeredHash": evidence_resp["documentHash"],
             "currentHash": current_document_hash.lower(),
-            "recordHash": evidence_resp["recordHash"]
+            "recordHash": evidence_resp["recordHash"],
+            "depth_checked": depth
         }
 
     def get_history(self, event_id: str, tenant_id: Optional[str] = None) -> dict:

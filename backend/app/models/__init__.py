@@ -7,6 +7,7 @@ from app.models.procurement import (
 	QualityEvent, Supplier, SupplierMetric,
 )
 from app.models.ingestion import IngestionError, IngestionFile, IngestionJob, IngestionStatus
+from app.services.market_intelligence.models import MarketSupplier, MarketProduct, MarketPriceObservation, MarketCollectionJob
 
 __all__ = [
 	"Evidence", "FabricOutbox", "OutboxStatus", "Tenant", "User", "Role", "Permission",
@@ -15,4 +16,5 @@ __all__ = [
 	"PurchaseOrderItem", "GoodsReceipt", "GoodsReceiptItem", "Invoice", "InvoiceItem", "Payment",
 	"Inventory", "InventoryMovement", "QualityEvent", "DeliveryEvent", "Dispute",
 	"IngestionJob", "IngestionFile", "IngestionError", "IngestionStatus",
+	"MarketSupplier", "MarketProduct", "MarketPriceObservation", "MarketCollectionJob",
 ]
